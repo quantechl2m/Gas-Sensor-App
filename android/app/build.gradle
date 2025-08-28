@@ -23,12 +23,15 @@ def flutterVersionName = localProperties.getProperty('flutter.versionName') ?: '
 
 android {
     namespace "com.hnrg.gassensor"
-    compileSdkVersion flutter.compileSdkVersion
+    compileSdkVersion 35
     ndkVersion flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+
+        coreLibraryDesugaringEnabled true
+
     }
 
     kotlinOptions {
@@ -68,4 +71,6 @@ dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
     implementation 'com.android.support:multidex:1.0.3'
     implementation platform('com.google.firebase:firebase-bom:31.1.1')
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+
 }

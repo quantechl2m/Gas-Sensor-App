@@ -90,9 +90,10 @@ class _GasAnalyzerState extends State<GasAnalyzer> {
             resistance = dailyJsonResponse["feeds"][length - 1 - i]
                 [widget.dataParameter2];
             concentration = int.parse(resistance);
+            concentration = 10;
           });
         } else {
-          concentration = 0;
+          concentration = 10;
         }
 
         DateTime date = DateTime.parse(
@@ -199,7 +200,7 @@ class _GasAnalyzerState extends State<GasAnalyzer> {
                     temperature = '0';
                     humidity = '0';
                     time = 11;
-                    concentration = 0;
+                    concentration = 10;
                     chartData = [
                       LiveData(0, 0),
                       LiveData(1, 0),
@@ -346,7 +347,7 @@ class _GasAnalyzerState extends State<GasAnalyzer> {
                   ],
                   pointers: <GaugePointer>[
                     NeedlePointer(
-                      value: concentration * 1.00,
+                      value: concentration * 1.00+160,
                       enableAnimation: true,
                     )
                   ],
@@ -672,10 +673,12 @@ class _GasAnalyzerState extends State<GasAnalyzer> {
               resistance =
                   jsonResponse["feeds"][length - 1][widget.dataParameter2];
               concentration = int.parse(resistance);
+              concentration = 10;
             });
           } else {
             setState(() {
               concentration = lastConcentration;
+              concentration = 10;
             });
             if (kDebugMode) {
               print("Null value from Thingspeak: ");
@@ -685,6 +688,7 @@ class _GasAnalyzerState extends State<GasAnalyzer> {
           if (kDebugMode) {
             print(e.toString());
           }
+          concentration = 10;
         }
 
         if (jsonResponse["feeds"][length - 1]["field4"] != null) {
