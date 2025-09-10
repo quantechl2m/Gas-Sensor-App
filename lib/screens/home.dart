@@ -11,6 +11,7 @@ import 'package:esp32sensor/services/edit_profile.dart';
 import 'package:esp32sensor/utils/constants/constants.dart';
 import 'package:esp32sensor/video/videoStream.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +23,10 @@ import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:syncfusion_flutter_gauges/gauges.dart';
 
+import '../services/firebase_service.dart';
+import '../services/gas_calculator.dart';
+import '../widgets/gas_history_dialog.dart';
+
 class Homepage extends StatefulWidget {
   const Homepage({super.key});
 
@@ -31,8 +36,13 @@ class Homepage extends StatefulWidget {
 
 class _HomepageState extends State<Homepage> {
   final currentUser = FirebaseAuth.instance.currentUser;
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+  final firebaseService = FirebaseService();
+  final gasCalculator = GasCalculator();
+  final DatabaseReference _databaseRef = FirebaseDatabase.instance.ref();
+
+
+  Map<String, double>? concentrations;
+
   final box = GetStorage();
   String name = '';
   String email = '';
@@ -48,7 +58,7 @@ class _HomepageState extends State<Homepage> {
   late Map<String, dynamic> jsonResponse;
   late String url;
 
-  Map<String, int> gasValues = {
+  Map<String, double> gasValues = {
     "NO2": 0,
     "CO": 0,
     "NH3": 0,
@@ -66,293 +76,6 @@ class _HomepageState extends State<Homepage> {
 
   String selectedGas = "NO2";
 
-  List<FlSpot> generateHistoryData() {
-    final random = Random();
-    List<FlSpot> spots = [];
-
-    for (int i = 0; i < 30; i++) {
-      double ppm = (random.nextInt(191) + 10).toDouble(); // random ppm 0-200
-      spots.add(FlSpot(i.toDouble(), ppm));
-    }
-    return spots;
-  }
-
-  void showHistoryDialog(BuildContext context) {
-    // --- generate spots (ppm 10–200) ---
-    final random = Random();
-    final spots = <FlSpot>[];
-    for (int i = 0; i < 30; i++) {
-      final ppm = (random.nextInt(191) + 10).toDouble(); // 10..200
-      spots.add(FlSpot(i.toDouble(), ppm));
-    }
-
-    // --- date labels (today back 30 days, oldest first) ---
-    List<String> generateDateLabels() {
-      final now = DateTime.now();
-      final fmt = DateFormat('dd-MM-yyyy');
-      return List.generate(30, (i) {
-        final d = now.subtract(Duration(days: 29 - i));
-        return fmt.format(d);
-      });
-    }
-
-    final labels = generateDateLabels();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: FractionallySizedBox(
-            widthFactor: 1, // ✅ 85% of phone width
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Title (reduced bottom padding)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        "History - $selectedGas",
-                        style: const TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-
-                  // Chart area (horizontal scroll if needed)
-                  SizedBox(
-                    height: MediaQuery.of(context).size.height*0.45, // a bit taller for labels
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        // make it wide enough to comfortably see 30 points
-                        final double contentWidth =
-                            max(constraints.maxWidth, 900);
-                        return SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: SizedBox(
-                            width: contentWidth,
-                            child: LineChart(
-                              LineChartData(
-                                minX: 0,
-                                maxX: 29,
-                                // 30 days: 0..29
-                                minY: 0,
-                                maxY: 250,
-                                // ✅ up to 210 ppm
-                                lineTouchData:
-                                    const LineTouchData(enabled: false),
-                                borderData: FlBorderData(show: true),
-
-                                // ✅ grid only on each 5th day (x = 0,5,10,15,20,25)
-                                gridData: FlGridData(
-                                  show: true,
-                                  drawHorizontalLine: true,
-                                  drawVerticalLine: true,
-                                  getDrawingHorizontalLine: (value) => FlLine(
-                                    color: Colors.grey.withOpacity(0.3),
-                                    strokeWidth: 1,
-                                  ),
-                                  getDrawingVerticalLine: (value) => FlLine(
-                                    color: Colors.grey.withOpacity(0.3),
-                                    strokeWidth: 1,
-                                  ),
-                                  checkToShowVerticalLine: (value) =>
-                                      value % 5 == 0,
-                                ),
-
-                                titlesData: FlTitlesData(
-                                  topTitles: const AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                  rightTitles: const AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                  leftTitles: const AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      reservedSize: 40,
-                                      maxIncluded: false,
-                                    ),
-                                  ),
-                                  bottomTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      interval: 5,
-                                      // every 5th date
-                                      getTitlesWidget: (value, _) {
-                                        // 👈 paste it here
-                                        final labels = generateDateLabels();
-                                        if (value.toInt() < labels.length &&
-                                            value % 5 == 0) {
-                                          return Padding(
-                                            padding: const EdgeInsets.only(
-                                                top: 10, left: 5),
-                                            child: Transform.rotate(
-                                              angle: 0, // tilt 45 degrees
-                                              child: Text(
-                                                labels[value.toInt()],
-                                                style: const TextStyle(
-                                                    fontSize: 9),
-                                              ),
-                                            ),
-                                          );
-                                        }
-                                        return const SizedBox.shrink();
-                                      },
-                                    ),
-                                  ),
-                                ),
-
-                                lineBarsData: [
-                                  LineChartBarData(
-                                    spots: spots,
-                                    isCurved: true,
-                                    barWidth: 3,
-                                    color: Colors.blue,
-                                    belowBarData: BarAreaData(
-                                      show: true,
-                                      color: Colors.blue.withOpacity(0.18),
-                                    ),
-                                    dotData: FlDotData(show: true),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-
-                  // Close button
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Close'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _loadData() async {
-    url = "https://api.thingspeak.com/channels/2009308/feeds.json?results";
-
-    http.Response response = await http.get(Uri.parse(url));
-
-    if (response.statusCode == 200 && _timer.isActive) {
-      jsonResponse = jsonDecode(response.body) as Map<String, dynamic>;
-
-      int length = jsonResponse["feeds"].length;
-
-      if (jsonResponse["feeds"][length - 1]["field1"] != null) {
-        setState(() {
-          resistance = jsonResponse["feeds"][length - 1]["field1"];
-          concentration = int.parse(resistance);
-        });
-      } else {
-        setState(() {
-          concentration = 0;
-        });
-        if (kDebugMode) {
-          print('Error: No data found for field1');
-        }
-      }
-
-      if (jsonResponse["feeds"][length - 1]["field2"] != null) {
-        setState(() {
-          butane = jsonResponse["feeds"][length - 1]["field2"];
-        });
-      } else {
-        setState(() {
-          butane = '0';
-        });
-        if (kDebugMode) {
-          print('Error: No data found for field2');
-        }
-      }
-
-      if (jsonResponse["feeds"][length - 1]["field3"] != null) {
-        setState(() {
-          carbonMonoxide = jsonResponse["feeds"][length - 1]["field3"];
-        });
-      } else {
-        setState(() {
-          carbonMonoxide = '0';
-        });
-        if (kDebugMode) {
-          print('Error: No data found for field3');
-        }
-      }
-
-      if (jsonResponse["feeds"][length - 1]["field4"] != null) {
-        setState(() {
-          temperature = jsonResponse["feeds"][length - 1]["field4"];
-        });
-      } else {
-        setState(() {
-          temperature = '0';
-        });
-        if (kDebugMode) {
-          print('Error: No data found for field4');
-        }
-      }
-
-      if (jsonResponse["feeds"][length - 1]["field5"] != null) {
-        setState(() {
-          humidity = jsonResponse["feeds"][length - 1]["field5"];
-        });
-      } else {
-        setState(() {
-          humidity = '0';
-        });
-        if (kDebugMode) {
-          print('Error: No data found for field5');
-        }
-      }
-    }
-  }
-
-  Future<void> initNotifications() async {
-    if (await Permission.notification.request().isGranted) {
-      // Permission granted
-    }
-    const AndroidInitializationSettings androidInit =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-    const InitializationSettings initSettings =
-        InitializationSettings(android: androidInit);
-    await flutterLocalNotificationsPlugin.initialize(initSettings);
-  }
-
-  Future<void> showGasNotification(
-      String gas, double value, String level, int notificationId) async {
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails('gas_channel', 'Gas Alerts',
-            importance: Importance.max,
-            priority: Priority.high,
-            showWhen: false);
-
-    const NotificationDetails platformDetails =
-        NotificationDetails(android: androidDetails);
-
-    await flutterLocalNotificationsPlugin.show(
-      notificationId,
-      "⚠️ Gas Alert",
-      "$gas level is $level: $value ppm",
-      platformDetails,
-    );
-  }
 
   Future<dynamic> gettingUserData() async {
     DocumentSnapshot snap = await FirebaseFirestore.instance
@@ -377,71 +100,66 @@ class _HomepageState extends State<Homepage> {
     });
   }
 
-  String getGasLevel(String gas, int value) {
-    switch (gas) {
-      case "NO2":
-        if (value <= 40) return "Good";
-        if (value <= 80) return "Moderate";
-        if (value <= 120) return "Unhealthy";
-        return "Hazardous";
-      case "CO":
-        if (value <= 50) return "Good";
-        if (value <= 100) return "Moderate";
-        if (value <= 150) return "Unhealthy";
-        return "Hazardous";
-      case "NH3":
-        if (value <= 30) return "Good";
-        if (value <= 60) return "Moderate";
-        if (value <= 120) return "Unhealthy";
-        return "Hazardous";
-      case "Methanol":
-        if (value <= 50) return "Good";
-        if (value <= 100) return "Moderate";
-        if (value <= 150) return "Unhealthy";
-        return "Hazardous";
-      default:
-        return "Good";
+  void _fetchGasData() async {
+    try {
+      final snapshot = await _databaseRef.child("ENoze/current").get();
+
+      if (snapshot.exists) {
+        print("Firebase data: ${snapshot.value}");
+
+        final data = Map<String, dynamic>.from(snapshot.value as Map);
+        final fetchedConcentrations = {
+          "res1": data["res1"] ?? 0.0,
+          "res2": data["res2"] ?? 0.0,
+          "res3": data["res3"] ?? 0.0,
+          "res4": data["res4"] ?? 0.0,
+        };
+
+// Fire-and-forget
+        gasCalculator.calculateAndNotify(fetchedConcentrations, (computedGasValues) {
+          setState(() {
+            concentrations = computedGasValues;
+            gasValues = computedGasValues;
+            concentration = gasValues[selectedGas]!.toInt();
+            debugPrint("firebase: $gasValues");
+          });
+        });
+      } else {
+        print("No data found at path: ENoze/current");
+        setState(() {
+          concentrations = {
+            "NO2": 0.0,
+            "CO": 0.0,
+            "NH3": 0.0,
+            "Methanol": 0.0,
+          };
+        });
+      }
+    } catch (e) {
+      print("Error fetching data: $e");
     }
   }
 
-  void generateRandomGasValues() {
-    final random = Random();
 
-    // Generate random ppm for each gas (0 to 200)
-    gasValues["NO2"] = random.nextInt(201);
-    gasValues["CO"] = random.nextInt(201);
-    gasValues["NH3"] = random.nextInt(201);
-    gasValues["Methanol"] = random.nextInt(201);
-
-    // Map gas values
-
-    int notificationId = 0;
-    gasValues.forEach((gas, value) {
-      String level = getGasLevel(gas, value);
-      if (level == "Unhealthy" || level == "Hazardous") {
-        showGasNotification(gas, value.toDouble(), level, notificationId);
-        notificationId++;
-      }
-    });
-
-    // Set default displayed gas
-    setState(() {
-      selectedGas = "NO2";
-      concentration = gasValues[selectedGas]!;
-    });
-  }
 
   @override
   void initState() {
     super.initState();
-    initNotifications();
-    generateRandomGasValues(); // initialize first
-
     gettingUserData();
     updateLanguage(getCurrentLocale());
-    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      _loadData();
+    // _fetchGasData();
+    firebaseService.listenToSensorData().listen((fetchedConcentrations) {
+      gasCalculator.calculateAndNotify(fetchedConcentrations, (computedGasValues) {
+        if (mounted) {
+          setState(() {
+            concentrations = computedGasValues;
+            gasValues = computedGasValues;
+            concentration = gasValues[selectedGas]!.toInt();
+          });
+        }
+      });
     });
+
   }
 
   @override
@@ -523,7 +241,7 @@ class _HomepageState extends State<Homepage> {
     void updateSelectedGas(String gas) {
       setState(() {
         selectedGas = gas;
-        concentration = gasValues[selectedGas]!;
+        concentration = gasValues[selectedGas]!.toInt();
 
         if (gas == "NO2") {
           selectedValue = "$concentration PPM";
@@ -534,9 +252,6 @@ class _HomepageState extends State<Homepage> {
         } else {
           selectedValue = "$concentration PPM";
         }
-        // if(concentration>120){
-        //   showGasNotification(selectedGas, concentration.toDouble());
-        // }
       });
     }
 
@@ -695,7 +410,9 @@ class _HomepageState extends State<Homepage> {
         backgroundColor: Colors.transparent,
       ),
       backgroundColor: Colors.white,
-      body: Container(
+      body: concentrations==null
+          ?const Center(child: CircularProgressIndicator())
+      :Container(
         alignment: Alignment.center,
         color: const Color.fromARGB(255, 232, 241, 236),
         child: SingleChildScrollView(
@@ -718,7 +435,7 @@ class _HomepageState extends State<Homepage> {
                   right: 12,bottom: -10,
                   child: IconButton(
                     icon: const Icon(Icons.history, color: Colors.grey, size: 35),
-                    onPressed: () => showHistoryDialog(context),
+                    onPressed: () => showHistoryDialog(context,selectedGas),
                   ),
                 ),
               ],
